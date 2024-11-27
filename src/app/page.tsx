@@ -271,9 +271,15 @@ const useAudioRecorder = ({
       const average = sum / dataArray.length;
       setVolume(average);
       console.log(`Current volume: ${average.toFixed(2)}`);
+
+      // Add volume threshold check
+      if (average < 7 && isRecording.current) {
+        console.log('Volume below threshold, stopping recording');
+        stopRecording();
+      }
     };
 
-    // Set up interval to log volume every 300ms
+    // Set up interval to check volume every 300ms
     volumeIntervalRef.current = setInterval(getVolume, 300);
   };
 
