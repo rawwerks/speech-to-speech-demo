@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { getWeather, getWeatherSchema } from "@/app/tools";
 import { reflectiveWomanEmbedding } from "@/app/voices";
+import SilenceDetector from "@/app/silence-detector";
 
 const PLAY_RECORDED_AUDIO = false;
 const GRAY_COLOR = "#30323E";
@@ -193,36 +194,53 @@ const useAudioRecorder = ({
   groq,
 }: UseAudioRecorderProps) => {
   const isRecording = useRef<boolean>(false);
-  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(
-    null
-  );
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const [mimeType, setMimeType] = useState<string>("audio/webm;codecs=opus");
   const [supportedMimeTypes, setSupportedMimeTypes] = useState<string[]>([]);
   const [volume, setVolume] = useState<number>(0);
   const volumeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [silenceDetector, setSilenceDetector] = useState<SilenceDetector | null>(null);
+
+  // Define stopRecording function first
+  const stopRecording = useCallback(() => {
+    if (mediaRecorder) {
+      mediaRecorder.onstop = () => {
+        handleChunks();
+      };
+    }
+    mediaRecorder?.stop();
+    mediaRecorder?.stream
+      .getTracks()
+      .forEach((track: MediaStreamTrack) => track.stop());
+    isRecording.current = false;
+    onRecordingEnd();
+    setVolume(0);
+
+    // Clear the volume logging interval
+    if (volumeIntervalRef.current) {
+      clearInterval(volumeIntervalRef.current);
+      volumeIntervalRef.current = null;
+    }
+
+    if (silenceDetector) {
+      silenceDetector.stop();
+      setSilenceDetector(null);
+    }
+  }, [mediaRecorder, onRecordingEnd, silenceDetector]);
+
+  // Now we can safely define handleSilenceDetected
+  const handleSilenceDetected = useCallback(() => {
+    console.log('Silence detected, stopping recording');
+    stopRecording();
+  }, [stopRecording]);
 
   useEffect(() => {
-    const typesToCheck = [
-      "audio/webm",
-      "audio/webm;codecs=opus",
-      "audio/webm;codecs=vorbis",
-      "audio/ogg",
-      "audio/ogg;codecs=opus",
-      "audio/ogg;codecs=vorbis",
-      "audio/mp4",
-      "audio/mp4;codecs=mp4a.40.2",
-      "audio/wav",
-      "audio/mpeg",
-    ];
-    const supportedTypes = typesToCheck.filter((type) =>
-      MediaRecorder.isTypeSupported(type)
-    );
-    setSupportedMimeTypes(supportedTypes);
-
-    // set mime type to the first supported type
-    setMimeType(supportedTypes[0]);
-  }, []);
+    window.addEventListener('silence-detected', handleSilenceDetected);
+    return () => {
+      window.removeEventListener('silence-detected', handleSilenceDetected);
+    };
+  }, [handleSilenceDetected]);
 
   const startRecording = async () => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -281,27 +299,14 @@ const useAudioRecorder = ({
 
     // Set up interval to check volume every 300ms
     volumeIntervalRef.current = setInterval(getVolume, 300);
-  };
 
-  const stopRecording = () => {
-    if (mediaRecorder) {
-      mediaRecorder.onstop = () => {
-        handleChunks();
-      };
-    }
-    mediaRecorder?.stop();
-    mediaRecorder?.stream
-      .getTracks()
-      .forEach((track: MediaStreamTrack) => track.stop());
-    isRecording.current = false;
-    onRecordingEnd();
-    setVolume(0);
-
-    // Clear the volume logging interval
-    if (volumeIntervalRef.current) {
-      clearInterval(volumeIntervalRef.current);
-      volumeIntervalRef.current = null;
-    }
+    // Initialize silence detector
+    const detector = new SilenceDetector({
+      threshold: 25,
+      minSilenceDuration: 2000
+    });
+    setSilenceDetector(detector);
+    await detector.start();
   };
 
   async function handleChunks() {
