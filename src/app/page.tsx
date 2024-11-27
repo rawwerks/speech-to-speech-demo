@@ -200,7 +200,11 @@ const useAudioRecorder = ({
   const [mimeType, setMimeType] = useState<string>("audio/webm;codecs=opus");
   const [supportedMimeTypes, setSupportedMimeTypes] = useState<string[]>([]);
   const [volume, setVolume] = useState<number>(0);
-  const volumeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const dataArrayRef = useRef<Uint8Array | null>(null);
+  const recordingStartTimeRef = useRef<number | null>(null);
+  const MINIMUM_RECORDING_DURATION = 2000; // 2 seconds in milliseconds
 
   useEffect(() => {
     const typesToCheck = [
@@ -225,84 +229,110 @@ const useAudioRecorder = ({
   }, []);
 
   const startRecording = async () => {
+    if (isRecording.current) return;
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       console.error("Media Devices will not work on this browser.");
       return;
     }
     onRecordingStart();
+    recordingStartTimeRef.current = Date.now();
     isRecording.current = true;
-    const audioConstraints = {
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        sampleRate: 16000,
-      },
-    };
-    const stream = await navigator.mediaDevices.getUserMedia(audioConstraints);
-    if (!MediaRecorder.isTypeSupported(mimeType)) {
-      console.error(`MIME type ${mimeType} is not supported on this browser.`);
-      return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 16000,
+        },
+      });
+
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      dataArrayRef.current = dataArray;
+
+      const recorder = new MediaRecorder(stream, {
+        mimeType,
+        audioBitsPerSecond: 96000 / 4,
+      });
+
+      recorder.ondataavailable = (event: BlobEvent) => {
+        audioChunksRef.current.push(event.data);
+      };
+      recorder.start();
+      setMediaRecorder(recorder);
+      audioChunksRef.current = [];
+
+      // Start the animation frame loop for volume updates
+      animationFrameRef.current = requestAnimationFrame(updateVolume);
+    } catch (error) {
+      console.error("Error starting recording:", error);
+      isRecording.current = false;
+      onRecordingEnd();
     }
-    const recorderOptions = {
-      mimeType,
-      audioBitsPerSecond: 96000 / 4,
-    };
-    const recorder = new MediaRecorder(stream, recorderOptions);
-    const audioContext = new AudioContext();
-    const source = audioContext.createMediaStreamSource(stream);
-    const analyser = audioContext.createAnalyser();
-    source.connect(analyser);
-    analyser.fftSize = 512;
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-    recorder.ondataavailable = (event: BlobEvent) => {
-      audioChunksRef.current.push(event.data);
-    };
-    recorder.start();
-    setMediaRecorder(recorder);
-    audioChunksRef.current = [];
-
-    const getVolume = () => {
-      analyser.getByteFrequencyData(dataArray);
-      let sum = 0;
-      for (let i = 0; i < dataArray.length; i++) {
-        sum += dataArray[i];
-      }
-      const average = sum / dataArray.length;
-      setVolume(average);
-      console.log(`Current volume: ${average.toFixed(2)}`);
-
-      // Add volume threshold check
-      if (average < 7 && isRecording.current) {
-        console.log('Volume below threshold, stopping recording');
-        stopRecording();
-      }
-    };
-
-    // Set up interval to check volume every 300ms
-    volumeIntervalRef.current = setInterval(getVolume, 300);
   };
 
   const stopRecording = () => {
+    if (!isRecording.current) return;
+
     if (mediaRecorder) {
-      mediaRecorder.onstop = () => {
-        handleChunks();
-      };
+      mediaRecorder.onstop = handleChunks;
+      mediaRecorder.stop();
+      mediaRecorder.stream.getTracks().forEach((track) => track.stop());
     }
-    mediaRecorder?.stop();
-    mediaRecorder?.stream
-      .getTracks()
-      .forEach((track: MediaStreamTrack) => track.stop());
+
     isRecording.current = false;
     onRecordingEnd();
     setVolume(0);
+    setMediaRecorder(null);
+    recordingStartTimeRef.current = null;
 
-    // Clear the volume logging interval
-    if (volumeIntervalRef.current) {
-      clearInterval(volumeIntervalRef.current);
-      volumeIntervalRef.current = null;
+    // Stop the animation frame loop
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
     }
   };
+
+  const updateVolume = () => {
+    if (!isRecording.current || !analyserRef.current || !dataArrayRef.current) return;
+
+    analyserRef.current.getByteFrequencyData(dataArrayRef.current);
+    const sum = dataArrayRef.current.reduce((acc, val) => acc + (val * val), 0);
+    const rms = Math.sqrt(sum / dataArrayRef.current.length);
+    const normalizedVolume = Math.min(100, Math.round((rms / 128) * 100));
+
+    setVolume(normalizedVolume);
+
+    console.log(`Current volume: ${normalizedVolume}`);
+
+    const recordingDuration = Date.now() - (recordingStartTimeRef.current || 0);
+    if (recordingDuration >= MINIMUM_RECORDING_DURATION) {
+      if (normalizedVolume < 20 && isRecording.current) {
+        console.log('Volume below threshold, stopping recording');
+        stopRecording();
+        return;
+      }
+    }
+
+    animationFrameRef.current = requestAnimationFrame(updateVolume);
+  };
+
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []);
 
   async function handleChunks() {
     let transcription = "";
@@ -324,15 +354,6 @@ const useAudioRecorder = ({
       onTranscribe(transcription);
     }
   }
-
-  // Clean up interval on component unmount
-  useEffect(() => {
-    return () => {
-      if (volumeIntervalRef.current) {
-        clearInterval(volumeIntervalRef.current);
-      }
-    };
-  }, []);
 
   return {
     isRecording: isRecording.current,
