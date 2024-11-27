@@ -85,9 +85,9 @@ function useTTS(cartesia: Cartesia | null) {
 
 async function transcribe(blob: Blob, groq: Groq) {
   const startTime = performance.now();
-  const response = await groq.audio.translations.create({
+  const response = await groq.audio.transcriptions.create({
     file: await toFile(blob, "audio.webm"),
-    model: "whisper-large-v3",
+    model: "whisper-large-v3-turbo",
     prompt: "",
     response_format: "json",
     temperature: 0,
@@ -438,6 +438,7 @@ function App({
   const historyRef = useRef<Groq.Chat.ChatCompletionMessageParam[]>([]);
   const [historyLastUpdate, setHistoryLastUpdate] = useState(new Date());
   const { speak, isPlaying } = useTTS(cartesia);
+  const [isRecordingActive, setIsRecordingActive] = useState(false);
 
   const { isRecording, startRecording, stopRecording, volume } =
     useAudioRecorder({
@@ -451,9 +452,10 @@ function App({
       },
       onRecordingStart: () => {
         historyRef.current = [...historyRef.current];
+        setIsRecordingActive(true);
       },
       onRecordingEnd: () => {
-        // No additional actions needed for now
+        setIsRecordingActive(false);
       },
       groq,
     });
@@ -465,12 +467,36 @@ function App({
   };
 
   const handleMicrophonePress = () => {
-    startRecording();
+    if (!isRecordingActive) {
+      startRecording();
+    }
   };
 
   const handleMicrophoneRelease = useCallback(() => {
-    stopRecording();
-  }, [stopRecording]);
+    if (isRecordingActive) {
+      stopRecording();
+    }
+  }, [stopRecording, isRecordingActive]);
+
+  // Add keyboard event handler for spacebar
+  useEffect(() => {
+    const handleKeyPress = (event: KeyboardEvent) => {
+      // Only handle spacebar if not in an input field
+      if (event.code === 'Space' && event.target === document.body) {
+        event.preventDefault(); // Prevent page scroll
+        if (isRecordingActive) {
+          stopRecording();
+        } else {
+          startRecording();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyPress);
+    return () => {
+      document.removeEventListener('keydown', handleKeyPress);
+    };
+  }, [startRecording, stopRecording, isRecordingActive]);
 
   const triggerCompletionFlow = async () => {
     
@@ -484,9 +510,9 @@ function App({
     // calling the generated toolCalls in case there are any, which can recursively
     // call triggerCompletionFlow in case
     // more toolCalls are generated.
-    if (toolCalls.length > 0) {
-      await handleToolCalls(toolCalls);
-    }
+    // if (toolCalls.length > 0) {
+    //   await handleToolCalls(toolCalls);
+    // }
 
     if (response.length > 0) {
       setHistoryLastUpdate(new Date());
@@ -585,21 +611,22 @@ function App({
         <div className="fixed bottom-4 right-4 select-none cursor-pointer">
           <div
             id="microphone-button"
-            className={`p-6 rounded-full ${
-              isRecording ? "recording-animation" : ""
-            }`}
+            className={`p-6 rounded-full ${isRecordingActive ? "recording-animation" : ""}`}
             style={{
-              backgroundColor: isRecording ? GROQ_ORANGE : GRAY_COLOR,
+              backgroundColor: isRecordingActive ? GROQ_ORANGE : GRAY_COLOR,
               transition: "transform 0.05s ease",
-              transform: `scale(${1 + volume / 100 + (isRecording ? 0.1 : 0)})`,
-              boxShadow: isRecording
+              transform: `scale(${1 + volume / 100 + (isRecordingActive ? 0.1 : 0)})`,
+              boxShadow: isRecordingActive
                 ? "0 0 39px 37px rgba(245, 80, 54, 0.7)"
                 : "none",
             }}
-            onMouseDown={handleMicrophonePress}
-            onMouseUp={handleMicrophoneRelease}
-            onTouchStart={handleMicrophonePress}
-            onTouchEnd={handleMicrophoneRelease}
+            onClick={() => {
+              if (isRecordingActive) {
+                stopRecording();
+              } else {
+                startRecording();
+              }
+            }}
           >
             <div
               style={{
@@ -607,7 +634,7 @@ function App({
               }}
             >
               <Image
-                src={isRecording ? "microphone-white.svg" : "microphone.svg"}
+                src={isRecordingActive ? "microphone-white.svg" : "microphone.svg"}
                 className="pointer-events-none"
                 alt="microphone"
                 width={30}
