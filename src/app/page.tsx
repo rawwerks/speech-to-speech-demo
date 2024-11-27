@@ -116,11 +116,11 @@ async function streamCompletion(
         
 You are Samantha.
 
-Respond in brief natural sentences. Use tools when appropriate before giving a response. Only use a tool if it is necessary.`,
+Respond in brief natural sentences.`,
       },
       ...messages,
     ],
-    tools: [getWeatherSchema],
+    // tools: [getWeatherSchema],
     model: "llama3-70b-8192",
     temperature: 0.7,
     max_tokens: 1024,
