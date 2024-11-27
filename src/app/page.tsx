@@ -288,25 +288,21 @@ const useAudioRecorder = ({
       }
       const average = sum / dataArray.length;
       setVolume(average);
-      console.log(`Current volume: ${average.toFixed(2)}`);
-
-      // Add volume threshold check
-      if (average < 7 && isRecording.current) {
-        console.log('Volume below threshold, stopping recording');
-        stopRecording();
-      }
     };
 
-    // Set up interval to check volume every 300ms
+    // Set up interval to check volume every 300ms (only for UI feedback)
     volumeIntervalRef.current = setInterval(getVolume, 300);
 
     // Initialize silence detector
     const detector = new SilenceDetector({
-      threshold: 25,
-      minSilenceDuration: 2000
+      threshold: 5,
+      minSilenceDuration: 1000,  // 1 second of silence
+      minRecordingDuration: 2000  // Minimum 2 seconds of recording
     });
     setSilenceDetector(detector);
     await detector.start();
+
+    console.log('Recording started');
   };
 
   async function handleChunks() {
