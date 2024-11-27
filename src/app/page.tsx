@@ -200,6 +200,7 @@ const useAudioRecorder = ({
   const [mimeType, setMimeType] = useState<string>("audio/webm;codecs=opus");
   const [supportedMimeTypes, setSupportedMimeTypes] = useState<string[]>([]);
   const [volume, setVolume] = useState<number>(0);
+  const volumeIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const typesToCheck = [
@@ -269,9 +270,11 @@ const useAudioRecorder = ({
       }
       const average = sum / dataArray.length;
       setVolume(average);
-      requestAnimationFrame(getVolume);
+      console.log(`Current volume: ${average.toFixed(2)}`);
     };
-    getVolume();
+
+    // Set up interval to log volume every 300ms
+    volumeIntervalRef.current = setInterval(getVolume, 300);
   };
 
   const stopRecording = () => {
@@ -287,6 +290,12 @@ const useAudioRecorder = ({
     isRecording.current = false;
     onRecordingEnd();
     setVolume(0);
+
+    // Clear the volume logging interval
+    if (volumeIntervalRef.current) {
+      clearInterval(volumeIntervalRef.current);
+      volumeIntervalRef.current = null;
+    }
   };
 
   async function handleChunks() {
@@ -309,6 +318,15 @@ const useAudioRecorder = ({
       onTranscribe(transcription);
     }
   }
+
+  // Clean up interval on component unmount
+  useEffect(() => {
+    return () => {
+      if (volumeIntervalRef.current) {
+        clearInterval(volumeIntervalRef.current);
+      }
+    };
+  }, []);
 
   return {
     isRecording: isRecording.current,
